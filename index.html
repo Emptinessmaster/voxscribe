@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>VoxScribe · Editor audio e trascrizione automatica nel browser — 100% privato</title>
+  <meta name="description" content="Registra o carica audio, tagliane le parti, e trascrivilo in testo con timestamp — interamente nel tuo browser. Nessun cloud, nessun upload. Funziona anche offline." />
+  <meta name="keywords" content="trascrizione audio, speech to text, whisper browser, editor audio online, audio in testo, sottotitoli srt, trascrivere vocale, privacy" />
+  <meta name="author" content="VoxScribe" />
+  <meta name="theme-color" content="#0A0B0F" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="VoxScribe · Editor audio e trascrizione nel browser" />
+  <meta property="og:description" content="Editing audio e speech-to-text 100% locali. La tua voce non lascia mai il dispositivo." />
+  <meta property="og:locale" content="it_IT" />
+  <meta property="og:site_name" content="VoxScribe" />
+
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "VoxScribe",
+    "applicationCategory": "MultimediaApplication",
+    "operatingSystem": "Any (browser)",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+    "description": "In-browser audio editor and speech-to-text transcription. Runs entirely on-device, works offline."
+  }
+  </script>
+</head>
+<body>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('voxscribe-theme');
+        if (t) document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- ============================ HEADER ============================ -->
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="./" aria-label="VoxScribe home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="30" height="30">
+            <rect x="3"  y="13" width="3" height="6"  rx="1.5" fill="currentColor"/>
+            <rect x="8"  y="9"  width="3" height="14" rx="1.5" fill="currentColor"/>
+            <rect x="13" y="4"  width="3" height="24" rx="1.5" fill="currentColor"/>
+            <rect x="18" y="9"  width="3" height="14" rx="1.5" fill="currentColor"/>
+            <rect x="23" y="12" width="3" height="8"  rx="1.5" fill="currentColor"/>
+          </svg>
+        </span>
+        <span class="brand-name">Vox<span class="brand-accent">Scribe</span></span>
+      </a>
+
+      <div class="trust-banner" role="status">
+        <span class="trust-shield" aria-hidden="true">🛡️</span>
+        <span class="trust-text">
+          <strong>Zero Cloud.</strong>
+          I tuoi file vocali e le trascrizioni vengono elaborati solo sul tuo processore.
+        </span>
+        <button class="trust-info" id="howBtn" type="button">Come funziona?</button>
+      </div>
+
+      <nav class="header-actions">
+        <button class="btn btn-install" id="installBtn" type="button" hidden>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v10m0 0 4-4m-4 4-4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Installa App Offline
+        </button>
+        <a class="btn btn-donate" href="#dona"><span aria-hidden="true">☕</span> Offrimi un caffè</a>
+        <button class="btn btn-ghost icon-btn" id="themeToggle" type="button" aria-label="Cambia tema" title="Tema">
+          <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="2" x2="12" y2="4.5"/><line x1="12" y1="19.5" x2="12" y2="22"/><line x1="2" y1="12" x2="4.5" y2="12"/><line x1="19.5" y1="12" x2="22" y2="12"/><line x1="4.9" y1="4.9" x2="6.6" y2="6.6"/><line x1="17.4" y1="17.4" x2="19.1" y2="19.1"/><line x1="4.9" y1="19.1" x2="6.6" y2="17.4"/><line x1="17.4" y1="6.6" x2="19.1" y2="4.9"/></g></svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============================ HERO ============================ -->
+    <section class="hero">
+      <div class="wrap">
+        <p class="eyebrow">Editor audio + speech-to-text · 100% nel tuo browser</p>
+        <h1>Taglia il tuo audio e <span class="accent-text">trascrivilo</span> in testo.<br />Senza che la tua voce lasci il dispositivo.</h1>
+        <p class="lede">Registra dal microfono o carica un file, modifica la forma d'onda e ottieni una trascrizione con timestamp grazie a Whisper eseguito in locale via WebAssembly. Niente server, niente abbonamenti cloud.</p>
+        <div class="status-pill" id="localStatus">
+          <span class="status-dot"></span>
+          <span id="localStatusText">🟢 100% Elaborazione Locale (funziona anche in Modalità Aereo)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ APP ============================ -->
+    <section class="wrap app-shell" aria-label="Editor e trascrizione">
+
+      <!-- STEP 1 — Sorgente -->
+      <div class="panel" id="sourcePanel">
+        <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Carica un file audio o video">
+          <input type="file" id="fileInput" accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav" hidden />
+          <div class="dropzone-empty">
+            <svg viewBox="0 0 24 24" width="46" height="46" aria-hidden="true"><path d="M12 16V4m0 0 4 4m-4-4-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <p class="drop-title">Trascina qui un audio o video</p>
+            <p class="drop-sub">oppure <span class="link-like">scegli un file</span> — MP3, WAV, M4A, MP4</p>
+          </div>
+        </div>
+
+        <div class="source-divider"><span>oppure</span></div>
+
+        <div class="record-row">
+          <button class="btn btn-record" id="recordBtn" type="button">
+            <span class="rec-dot" aria-hidden="true"></span>
+            <span id="recordLabel">Registra dal microfono</span>
+          </button>
+          <span class="record-time" id="recordTime" hidden>00:00</span>
+        </div>
+      </div>
+
+      <!-- STEP 2 — Editor -->
+      <div class="panel editor-panel" id="editorPanel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>Editor forma d'onda</h2>
+            <p class="panel-sub" id="clipInfo">—</p>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="editorReset" type="button">Cambia file</button>
+        </div>
+
+        <div class="waveform-wrap">
+          <canvas id="waveform" height="180"></canvas>
+          <div class="wave-selection" id="waveSelection" hidden></div>
+          <div class="wave-playhead" id="wavePlayhead" hidden></div>
+        </div>
+
+        <div class="transport">
+          <button class="btn btn-icon-lg" id="playBtn" type="button" aria-label="Riproduci/Pausa" title="Riproduci/Pausa">
+            <svg class="ic-play" viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+            <svg class="ic-pause" viewBox="0 0 24 24" width="22" height="22" hidden><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>
+          </button>
+          <span class="time-readout"><span id="curTime">0:00</span> / <span id="totTime">0:00</span></span>
+
+          <div class="editor-tools">
+            <button class="btn btn-outline btn-sm" id="trimBtn" type="button" disabled title="Mantieni solo la selezione">✂️ Ritaglia selezione</button>
+            <button class="btn btn-outline btn-sm" id="deleteBtn" type="button" disabled title="Elimina la selezione">🗑 Elimina selezione</button>
+            <button class="btn btn-ghost btn-sm" id="selClearBtn" type="button" disabled>Deseleziona</button>
+          </div>
+        </div>
+
+        <div class="editor-controls">
+          <div class="field slider-field">
+            <div class="field-row">
+              <label class="field-label" for="gain">Volume</label>
+              <output class="field-value" id="gainVal">100%</output>
+            </div>
+            <input type="range" id="gain" min="0" max="300" step="5" value="100" />
+            <p class="field-hint">Regola il volume dell'intera clip. Anteprima non distruttiva: il guadagno viene applicato all'esportazione e alla trascrizione.</p>
+          </div>
+          <div class="editor-meta">
+            <button class="btn btn-ghost btn-sm" id="undoBtn" type="button" disabled>↩ Annulla ultima modifica</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 3 — Trascrizione -->
+      <div class="panel transcribe-panel" id="transcribePanel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>Trascrizione automatica</h2>
+            <p class="panel-sub">Speech-to-text con Whisper, eseguito localmente via WebAssembly.</p>
+          </div>
+        </div>
+
+        <div class="transcribe-controls">
+          <div class="field">
+            <label class="field-label" for="modelSel">Modello</label>
+            <select id="modelSel" class="select-input">
+              <option value="Xenova/whisper-tiny" selected>Whisper Tiny · veloce (~40&nbsp;MB)</option>
+              <option value="Xenova/whisper-base">Whisper Base · più preciso (~145&nbsp;MB)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="langSel">Lingua</label>
+            <select id="langSel" class="select-input">
+              <option value="auto" selected>Rilevamento automatico</option>
+              <option value="italian">Italiano</option>
+              <option value="english">Inglese</option>
+              <option value="spanish">Spagnolo</option>
+              <option value="french">Francese</option>
+              <option value="german">Tedesco</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-transcribe" id="transcribeBtn" type="button">
+            <span class="btn-spinner" hidden></span>
+            <span id="transcribeLabel">Trascrivi audio</span>
+          </button>
+        </div>
+
+        <div class="model-progress" id="modelProgress" hidden>
+          <div class="mp-bar"><span id="mpFill"></span></div>
+          <p class="mp-text" id="mpText">Preparazione del modello…</p>
+          <p class="mp-note">⬇️ Solo la prima volta: il modello viene scaricato e messo in cache per l'uso offline. Poi resta sul tuo dispositivo.</p>
+        </div>
+
+        <div class="transcript-area" id="transcriptArea" hidden>
+          <div class="transcript-toolbar">
+            <span class="transcript-count" id="transcriptCount">0 segmenti</span>
+            <div class="transcript-actions">
+              <button class="btn btn-outline btn-sm" id="copyTextBtn" type="button">📋 Copia testo</button>
+              <button class="btn btn-outline btn-sm" id="downloadTxtBtn" type="button">⬇ .TXT</button>
+              <button class="btn btn-outline btn-sm" id="downloadSrtBtn" type="button">⬇ .SRT</button>
+            </div>
+          </div>
+          <div class="transcript" id="transcript" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <!-- STEP 4 — Export audio -->
+      <div class="panel export-panel" id="exportPanel" hidden>
+        <div class="panel-head"><h2>Esporta audio modificato</h2></div>
+        <div class="export-row">
+          <button class="btn btn-primary" id="exportWavBtn" type="button">
+            <span class="btn-spinner" hidden></span> ⬇ Scarica WAV
+          </button>
+          <button class="btn btn-outline" id="exportMp3Btn" type="button">
+            <span class="btn-spinner" hidden></span> ⬇ Scarica MP3
+          </button>
+          <p class="export-note">Il WAV è sempre disponibile. L'MP3 usa FFmpeg.wasm, caricato al volo la prima volta.</p>
+        </div>
+      </div>
+
+      <aside class="ad-slot" aria-label="Advertisement">
+        <span class="ad-tag">Pubblicità</span>
+        <div class="ad-placeholder">Spazio annuncio · sostituisci con il tuo codice</div>
+      </aside>
+    </section>
+
+    <!-- ============================ COME FUNZIONA ============================ -->
+    <section class="wrap how" aria-label="Come funziona">
+      <h2 class="section-title">Come funziona</h2>
+      <div class="how-grid">
+        <article class="how-card"><span class="how-num">01</span><h3>Registra o carica</h3><p>Usa il microfono o trascina un file. L'audio resta in memoria, sul tuo dispositivo.</p></article>
+        <article class="how-card"><span class="how-num">02</span><h3>Modifica</h3><p>Visualizza la forma d'onda, seleziona, taglia, elimina porzioni e regola il volume.</p></article>
+        <article class="how-card"><span class="how-num">03</span><h3>Trascrivi</h3><p>Whisper gira in locale via WASM e produce il testo con timestamp, anche offline.</p></article>
+        <article class="how-card"><span class="how-num">04</span><h3>Esporta</h3><p>Copia il testo, scaricalo come TXT o SRT, e salva l'audio editato in WAV o MP3.</p></article>
+      </div>
+    </section>
+
+    <!-- ============================ FAQ ============================ -->
+    <section class="wrap seo" aria-label="Domande frequenti">
+      <div class="faq">
+        <h2>Domande frequenti</h2>
+        <details class="faq-item" open>
+          <summary>La mia voce viene inviata a un server?</summary>
+          <p>No. L'editing avviene con la Web Audio API e la trascrizione con Whisper eseguito via WebAssembly (ONNX Runtime), tutto nel tuo browser. L'audio e il testo non lasciano mai il dispositivo.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Cosa viene scaricato dalla rete?</summary>
+          <p>Solo il modello Whisper, una volta, alla prima trascrizione. Viene messo in cache per l'uso offline. Da lì in poi tutto funziona senza connessione.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Funziona offline?</summary>
+          <p>Sì. Dopo il primo caricamento dei modelli puoi installare VoxScribe come app (PWA) e usarla in modalità aereo.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Perché la trascrizione a volte è lenta?</summary>
+          <p>Il modello gira sul tuo processore. Su hosting statici il calcolo è a thread singolo per motivi di sicurezza del browser: il modello Tiny è il più veloce. Audio più corti e il modello Tiny danno risultati più rapidi.</p>
+        </details>
+      </div>
+    </section>
+
+    <!-- ============================ DONAZIONI ============================ -->
+    <section class="wrap donate" id="dona" aria-label="Sostieni il progetto">
+      <div class="donate-card">
+        <div class="donate-copy">
+          <h2>Ti è stato utile?</h2>
+          <p>VoxScribe è gratis, privato e senza abbonamenti cloud. Se ti fa risparmiare tempo e servizi a pagamento, un contributo aiuta a tenerlo vivo.</p>
+        </div>
+        <div class="donate-buttons">
+          <a class="btn btn-primary" href="https://buymeacoffee.com/emptinessmaster" target="_blank" rel="noopener">☕ Buy me a coffee</a>
+          <a class="btn btn-outline" href="https://paypal.me/EmptinessMaster" target="_blank" rel="noopener">🅿️ PayPal</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <span class="brand-name">Vox<span class="brand-accent">Scribe</span></span>
+        <p class="footer-tag">Editing audio e trascrizione privati, direttamente nel browser.</p>
+      </div>
+      <nav class="footer-links" aria-label="Link">
+        <a href="https://emptinessmaster.github.io/bytelens/" target="_blank" rel="noopener">ByteLens (immagini)</a>
+        <a href="https://emptinessmaster.github.io/privapdf/" target="_blank" rel="noopener">PrivaPDF (PDF)</a>
+        <a href="#dona">Sostieni</a>
+      </nav>
+    </div>
+    <div class="wrap footer-legal">
+      <p>© <span id="year">2026</span> VoxScribe · Audio e trascrizioni elaborati localmente, mai caricati online.</p>
+    </div>
+  </footer>
+
+  <!-- ============================ MODALE "COME FUNZIONA" ============================ -->
+  <div class="modal-backdrop" id="howModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="howTitle">
+      <button class="modal-close" data-close-modal aria-label="Chiudi">✕</button>
+      <div class="modal-emoji" aria-hidden="true">🛡️</div>
+      <h3 id="howTitle">Come VoxScribe protegge la tua voce</h3>
+      <p>Tutto avviene <strong>nel motore del tuo browser</strong>: l'audio viene decodificato con la Web Audio API e trascritto da <strong>Whisper</strong> eseguito via <strong>WebAssembly</strong> (ONNX Runtime), direttamente sul tuo processore.</p>
+      <ul class="modal-list">
+        <li><span aria-hidden="true">🚫</span> Nessun file audio inviato a un server.</li>
+        <li><span aria-hidden="true">🧠</span> Il modello gira in locale, sul tuo dispositivo.</li>
+        <li><span aria-hidden="true">✈️</span> Dopo il primo download del modello, funziona offline.</li>
+      </ul>
+      <button class="btn btn-primary btn-block" data-close-modal>Ho capito</button>
+    </div>
+  </div>
+
+  <!-- ============================ MODALE DONAZIONE ============================ -->
+  <div class="modal-backdrop" id="donateModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="donateTitle">
+      <button class="modal-close" data-close-modal aria-label="Chiudi">✕</button>
+      <div class="modal-emoji" aria-hidden="true">🎉</div>
+      <h3 id="donateTitle">Elaborato in totale riservatezza!</h3>
+      <p>La tua trascrizione e il tuo audio sono stati elaborati in totale riservatezza <strong>sul tuo computer</strong>. Nessun server esterno ha ascoltato la tua voce. Se questo strumento ti ha fatto risparmiare tempo e abbonamenti a servizi cloud, considera di offrirmi un caffè per supportare progetti liberi e orientati alla privacy.</p>
+      <div class="modal-donate-buttons">
+        <a class="btn btn-primary" href="https://buymeacoffee.com/emptinessmaster" target="_blank" rel="noopener">☕ Offrimi un caffè</a>
+        <a class="btn btn-outline" href="https://paypal.me/EmptinessMaster" target="_blank" rel="noopener">🅿️ Donazione PayPal</a>
+      </div>
+      <button class="btn btn-ghost btn-block" data-close-modal>Continua a usare l'app</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+name: Deploy su GitHub Pages
+
+# Deploy automatico del sito statico a ogni push su main.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # avvio manuale dalla tab Actions
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configura Pages
+        uses: actions/configure-pages@v5
+
+      - name: Carica l'artifact del sito
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy su GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

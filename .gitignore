@@ -1,0 +1,14 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Log e temporanei
+*.log
+*.tmp
+__nftest.txt
+
+# Dipendenze (l'app usa CDN, nessuna build)
+node_modules/
