@@ -554,10 +554,16 @@
     $('transcriptCount').textContent = segments.length + (segments.length === 1 ? ' segmento' : ' segmenti');
   }
 
-  function setModelProgress(pct, text) {
+  function fmtMB(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+
+  // Aggiorna la barra. { pct } → determinata; { indeterminate:true } → animata
+  // (usata quando Hugging Face non invia Content-Length e il totale è ignoto).
+  function setMp(opts) {
     $('modelProgress').hidden = false;
-    if (pct != null) $('mpFill').style.width = Math.max(0, Math.min(100, pct)) + '%';
-    if (text) $('mpText').textContent = text;
+    var fill = $('mpFill'), bar = fill.parentElement;
+    if (opts.indeterminate) { bar.classList.add('indeterminate'); }
+    else if (opts.pct != null) { bar.classList.remove('indeterminate'); fill.style.width = Math.max(0, Math.min(100, opts.pct)) + '%'; }
+    if (opts.text != null) $('mpText').textContent = opts.text;
   }
 
   $('transcribeBtn').addEventListener('click', function () {
@@ -566,7 +572,7 @@
     $('transcribeLabel').textContent = 'Trascrizione…';
     clearTranscript();
     $('transcriptArea').hidden = false;
-    setModelProgress(3, 'Preparazione del modello…');
+    setMp({ indeterminate: true, text: 'Preparazione del modello…' });
 
     var model = $('modelSel').value;
     var language = $('langSel').value;
@@ -588,24 +594,55 @@
         setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio'; return;
       }
 
+      // Traccia i byte scaricati per file. Hugging Face spesso NON invia
+      // Content-Length: in quel caso il totale è ignoto, quindi mostriamo i MB
+      // scaricati + tempo trascorso con barra animata, invece di una % ingannevole.
+      var dlFiles = {}, dlStart = Date.now(), modelReady = false;
+      function renderDownload() {
+        if (modelReady) return;
+        var loaded = 0, total = 0, totalKnown = true, any = false;
+        for (var k in dlFiles) {
+          any = true; loaded += dlFiles[k].loaded || 0;
+          if (dlFiles[k].total) total += dlFiles[k].total; else totalKnown = false;
+        }
+        var secs = Math.round((Date.now() - dlStart) / 1000);
+        if (!any) { setMp({ indeterminate: true, text: 'Preparazione del modello… ' + secs + 's' }); return; }
+        if (totalKnown && total > 0) {
+          setMp({ pct: loaded / total * 100, text: 'Scaricamento modello — ' + fmtMB(loaded) + ' / ' + fmtMB(total) + ' · ' + secs + 's' });
+        } else {
+          setMp({ indeterminate: true, text: 'Scaricamento modello — ' + fmtMB(loaded) + ' scaricati · ' + secs + 's' });
+        }
+      }
+      var heartbeat = setInterval(renderDownload, 500);
+
       worker.onmessage = function (e) {
         var m = e.data || {};
         if (m.type === 'progress') {
           var d = m.data || {};
-          if (d.status === 'progress' && d.file) setModelProgress(d.progress || 0, 'Scarico ' + d.file + ' — ' + Math.round(d.progress || 0) + '%');
-          else if (d.status === 'ready' || d.status === 'done') setModelProgress(100, 'Modello pronto');
-          else if (d.status) setModelProgress(null, d.status + (d.file ? ' — ' + d.file : ''));
+          if (d.file && (d.status === 'progress' || d.status === 'download' || d.status === 'initiate')) {
+            var prev = dlFiles[d.file] || { loaded: 0, total: 0 };
+            dlFiles[d.file] = {
+              loaded: (d.loaded != null ? d.loaded : prev.loaded) || 0,
+              total: (d.total != null ? d.total : prev.total) || 0
+            };
+          } else if (d.file && d.status === 'done') {
+            if (dlFiles[d.file] && dlFiles[d.file].total) dlFiles[d.file].loaded = dlFiles[d.file].total;
+          }
+          renderDownload();
         } else if (m.type === 'ready') {
-          setModelProgress(100, 'Trascrizione in corso…');
-          setTimeout(function () { $('modelProgress').hidden = true; }, 400);
+          modelReady = true; clearInterval(heartbeat);
+          setMp({ pct: 100, text: '✅ Modello pronto · trascrizione in corso…' });
+          setTimeout(function () { $('modelProgress').hidden = true; }, 600);
         } else if (m.type === 'segments') {
           (m.segments || []).forEach(addSegment);
         } else if (m.type === 'done') {
+          clearInterval(heartbeat);
           setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
           if (!segments.length) toast('Nessun parlato riconosciuto nell\'audio.', '');
           else toast('Trascrizione completata.', 'success');
         } else if (m.type === 'error') {
           console.error('Worker error:', m.message);
+          clearInterval(heartbeat);
           setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
           $('modelProgress').hidden = true;
           toast('Errore di trascrizione: ' + m.message, 'error');
@@ -613,6 +650,7 @@
       };
       worker.onerror = function (err) {
         console.error(err);
+        clearInterval(heartbeat);
         setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
         toast('Errore nel motore di trascrizione (rete necessaria al primo uso).', 'error');
       };

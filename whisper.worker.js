@@ -9,6 +9,16 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers
 
 // Nessun modello locale: si scarica dall'hub e si mette in cache nel browser.
 env.allowLocalModels = false;
+env.useBrowserCache = true; // cache dei pesi per l'uso offline (predefinito, reso esplicito)
+
+// Su hosting statico (GitHub Pages) la pagina non è cross-origin isolated:
+// niente SharedArrayBuffer → ONNX Runtime deve girare a thread singolo.
+try {
+  if (!self.crossOriginIsolated) {
+    env.backends.onnx.wasm.numThreads = 1;
+    env.backends.onnx.wasm.proxy = false;
+  }
+} catch (e) {}
 
 var transcriber = null;
 var loadedModel = null;
