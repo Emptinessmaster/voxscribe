@@ -38,6 +38,20 @@ async function getPipeline(model) {
 
 self.onmessage = async function (e) {
   var msg = e.data || {};
+
+  // Solo scaricamento + messa in cache del modello (senza trascrivere), usato dal
+  // pannello "Modelli" per pre-scaricare un modello e renderlo residente/offline.
+  if (msg.type === 'preload') {
+    try {
+      await getPipeline(msg.model || 'Xenova/whisper-base');
+      self.postMessage({ type: 'ready' });
+      self.postMessage({ type: 'done' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: String((err && err.message) || err) });
+    }
+    return;
+  }
+
   if (msg.type !== 'transcribe') return;
 
   var audio = msg.audio;                 // Float32Array mono

@@ -566,6 +566,183 @@
     if (opts.text != null) $('mpText').textContent = opts.text;
   }
 
+  /* ------------------------------------------------------------------ *
+   *  Gestione modelli — scarica singolarmente, mostra quelli residenti
+   * ------------------------------------------------------------------ */
+  var MODELS = [
+    { id: 'Xenova/whisper-tiny',   name: 'Tiny',   size: '~40 MB',  desc: 'Veloce, meno preciso' },
+    { id: 'Xenova/whisper-base',   name: 'Base',   size: '~145 MB', desc: 'Equilibrato' },
+    { id: 'Xenova/whisper-small',  name: 'Small',  size: '~245 MB', desc: 'Alta precisione — ideale per le canzoni' },
+    { id: 'Xenova/whisper-medium', name: 'Medium', size: '~740 MB', desc: 'Massima precisione, molto lento' }
+  ];
+  var selectedModel = 'Xenova/whisper-base';
+  var residentSet = new Set();          // id dei modelli già in cache (offline)
+  var downloading = null;               // id del modello in scaricamento (o null)
+  var dlWorker = null;
+  var dlPct = 0, dlText = '', dlIndeterminate = true;
+
+  function modelName(id) {
+    for (var i = 0; i < MODELS.length; i++) if (MODELS[i].id === id) return MODELS[i].name;
+    return id;
+  }
+
+  // Transformers.js mette i pesi nella Cache Storage 'transformers-cache', con
+  // chiave = URL completo di Hugging Face (…/Xenova/whisper-base/resolve/…/*.onnx).
+  // Un modello è "residente" se i suoi file .onnx sono presenti in cache.
+  async function scanResident() {
+    var set = new Set();
+    try {
+      if (typeof caches === 'undefined') return set;
+      var cache = await caches.open('transformers-cache');
+      var keys = await cache.keys();
+      keys.forEach(function (req) {
+        var u = (req && req.url) || '';
+        if (!/\.onnx(\?|$)/.test(u)) return;
+        MODELS.forEach(function (m) { if (u.indexOf('/' + m.id + '/') !== -1) set.add(m.id); });
+      });
+    } catch (e) {}
+    return set;
+  }
+
+  function updateDlProgress() {
+    var fill = document.getElementById('mmProgFill');
+    if (!fill) return;
+    var bar = fill.parentElement, txt = document.getElementById('mmProgTxt');
+    if (dlIndeterminate) { bar.classList.add('indeterminate'); }
+    else { bar.classList.remove('indeterminate'); fill.style.width = Math.max(0, Math.min(100, dlPct || 0)) + '%'; }
+    if (txt) txt.textContent = dlText || '';
+  }
+
+  function renderModelManager() {
+    var list = $('mmList'); if (!list) return;
+    list.innerHTML = '';
+    MODELS.forEach(function (m) {
+      var isResident = residentSet.has(m.id);
+      var isDl = (downloading === m.id);
+
+      var li = document.createElement('li');
+      li.className = 'mm-item' + (m.id === selectedModel ? ' is-selected' : '');
+      li.setAttribute('data-model', m.id);
+
+      var pick = document.createElement('label'); pick.className = 'mm-pick';
+      var radio = document.createElement('input');
+      radio.type = 'radio'; radio.name = 'modelPick'; radio.value = m.id; radio.checked = (m.id === selectedModel);
+      radio.addEventListener('change', function () { selectedModel = m.id; renderModelManager(); });
+      var info = document.createElement('span'); info.className = 'mm-info';
+      var nm = document.createElement('span'); nm.className = 'mm-name';
+      nm.appendChild(document.createTextNode(m.name));
+      var sz = document.createElement('span'); sz.className = 'mm-size'; sz.textContent = m.size; nm.appendChild(sz);
+      var desc = document.createElement('span'); desc.className = 'mm-desc'; desc.textContent = m.desc;
+      info.appendChild(nm); info.appendChild(desc);
+      pick.appendChild(radio); pick.appendChild(info);
+
+      var right = document.createElement('div'); right.className = 'mm-right';
+      var status = document.createElement('span');
+      var action = document.createElement('button'); action.type = 'button'; action.className = 'btn btn-outline btn-sm mm-dl';
+
+      if (isDl) {
+        status.className = 'mm-status is-loading'; status.textContent = '⬇️ Scaricamento…';
+        action.textContent = 'In corso…'; action.disabled = true;
+      } else if (isResident) {
+        status.className = 'mm-status is-ready'; status.textContent = '✅ Pronto · offline';
+        action.textContent = 'Scaricato'; action.disabled = true;
+      } else {
+        status.className = 'mm-status is-absent'; status.textContent = 'Non scaricato';
+        action.textContent = '⬇️ Scarica';
+        action.addEventListener('click', function (e) { e.stopPropagation(); downloadModel(m.id); });
+      }
+      if (downloading && downloading !== m.id && !isResident) action.disabled = true;
+
+      right.appendChild(status); right.appendChild(action);
+      li.appendChild(pick); li.appendChild(right);
+
+      if (isDl) {
+        var prog = document.createElement('div'); prog.className = 'mm-prog';
+        var pbar = document.createElement('div'); pbar.className = 'mm-prog-bar' + (dlIndeterminate ? ' indeterminate' : '');
+        var pfill = document.createElement('span'); pfill.id = 'mmProgFill';
+        if (!dlIndeterminate) pfill.style.width = (dlPct || 0) + '%';
+        pbar.appendChild(pfill);
+        var ptxt = document.createElement('span'); ptxt.className = 'mm-prog-txt'; ptxt.id = 'mmProgTxt'; ptxt.textContent = dlText || '';
+        prog.appendChild(pbar); prog.appendChild(ptxt);
+        li.appendChild(prog);
+      }
+
+      li.addEventListener('click', function (e) {
+        if (e.target.closest('.mm-dl')) return;
+        selectedModel = m.id; renderModelManager();
+      });
+      list.appendChild(li);
+    });
+  }
+
+  function downloadModel(id) {
+    if (downloading) return;
+    downloading = id; dlPct = 0; dlText = 'Preparazione…'; dlIndeterminate = true;
+    renderModelManager();
+
+    var dlFiles = {}, dlStart = Date.now(), ready = false;
+    function tick() {
+      if (ready) return;
+      var loaded = 0, total = 0, totalKnown = true, any = false;
+      for (var k in dlFiles) { any = true; loaded += dlFiles[k].loaded || 0; if (dlFiles[k].total) total += dlFiles[k].total; else totalKnown = false; }
+      var secs = Math.round((Date.now() - dlStart) / 1000);
+      if (!any) { dlIndeterminate = true; dlText = 'Preparazione… ' + secs + 's'; }
+      else if (totalKnown && total > 0) { dlIndeterminate = false; dlPct = loaded / total * 100; dlText = fmtMB(loaded) + ' / ' + fmtMB(total) + ' · ' + secs + 's'; }
+      else { dlIndeterminate = true; dlText = fmtMB(loaded) + ' scaricati · ' + secs + 's'; }
+      updateDlProgress();
+    }
+    var hb = setInterval(tick, 500);
+
+    try { dlWorker = new Worker('whisper.worker.js', { type: 'module' }); }
+    catch (e) {
+      clearInterval(hb); downloading = null; renderModelManager();
+      toast('Impossibile avviare il download del modello.', 'error'); return;
+    }
+
+    dlWorker.onmessage = function (e) {
+      var m = e.data || {};
+      if (m.type === 'progress') {
+        var d = m.data || {};
+        if (d.file && (d.status === 'progress' || d.status === 'download' || d.status === 'initiate')) {
+          var prev = dlFiles[d.file] || { loaded: 0, total: 0 };
+          dlFiles[d.file] = {
+            loaded: (d.loaded != null ? d.loaded : prev.loaded) || 0,
+            total: (d.total != null ? d.total : prev.total) || 0
+          };
+        } else if (d.file && d.status === 'done') {
+          if (dlFiles[d.file] && dlFiles[d.file].total) dlFiles[d.file].loaded = dlFiles[d.file].total;
+        }
+        tick();
+      } else if (m.type === 'ready') {
+        ready = true;
+      } else if (m.type === 'done') {
+        clearInterval(hb); finishDownload(id, true);
+      } else if (m.type === 'error') {
+        clearInterval(hb); console.error('Preload error:', m.message);
+        toast('Download modello non riuscito: ' + m.message, 'error');
+        finishDownload(id, false);
+      }
+    };
+    dlWorker.onerror = function (err) {
+      console.error(err); clearInterval(hb);
+      toast('Errore di rete nel download del modello (serve connessione).', 'error');
+      finishDownload(id, false);
+    };
+
+    dlWorker.postMessage({ type: 'preload', model: id });
+  }
+
+  async function finishDownload(id, ok) {
+    if (dlWorker) { dlWorker.terminate(); dlWorker = null; }
+    downloading = null;
+    residentSet = await scanResident();
+    renderModelManager();
+    if (ok) toast('Modello ' + modelName(id) + ' pronto · disponibile offline.', 'success');
+  }
+
+  // Rileva i modelli già residenti al caricamento, poi disegna il pannello.
+  (async function () { residentSet = await scanResident(); renderModelManager(); })();
+
   $('transcribeBtn').addEventListener('click', function () {
     if (!state.buffer) { toast('Carica prima un audio.', 'error'); return; }
     var btn = this; setBusy(btn, true);
@@ -574,7 +751,7 @@
     $('transcriptArea').hidden = false;
     setMp({ indeterminate: true, text: 'Preparazione del modello…' });
 
-    var model = $('modelSel').value;
+    var model = selectedModel;
     var language = $('langSel').value;
 
     (async function () {
@@ -643,6 +820,8 @@
           clearInterval(heartbeat);
           $('modelProgress').hidden = true;
           setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
+          // Il modello appena usato è ora in cache: aggiorna lo stato "residente".
+          scanResident().then(function (s) { residentSet = s; renderModelManager(); });
           if (!segments.length) toast('Nessun parlato riconosciuto nell\'audio.', '');
           else toast('Trascrizione completata.', 'success');
         } else if (m.type === 'error') {

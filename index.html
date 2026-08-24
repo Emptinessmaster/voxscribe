@@ -179,16 +179,16 @@
           </div>
         </div>
 
-        <div class="transcribe-controls">
-          <div class="field">
-            <label class="field-label" for="modelSel">Modello</label>
-            <select id="modelSel" class="select-input">
-              <option value="Xenova/whisper-tiny">Whisper Tiny · veloce, meno preciso (~40&nbsp;MB)</option>
-              <option value="Xenova/whisper-base" selected>Whisper Base · equilibrato (~145&nbsp;MB)</option>
-              <option value="Xenova/whisper-small">Whisper Small · alta precisione, ideale per le canzoni (~245&nbsp;MB)</option>
-              <option value="Xenova/whisper-medium">Whisper Medium · massima precisione, molto lento (~740&nbsp;MB)</option>
-            </select>
+        <!-- Gestione modelli: scarica singolarmente e vedi quali sono già residenti -->
+        <div class="model-manager" id="modelManager">
+          <div class="mm-head">
+            <span class="mm-title">Modelli di trascrizione</span>
+            <span class="mm-sub">Scaricali una volta: restano sul dispositivo per l'uso offline. Seleziona quello da usare per la trascrizione.</span>
           </div>
+          <ul class="mm-list" id="mmList" role="radiogroup" aria-label="Scelta del modello"></ul>
+        </div>
+
+        <div class="transcribe-controls">
           <div class="field">
             <label class="field-label" for="langSel">Lingua</label>
             <select id="langSel" class="select-input">
