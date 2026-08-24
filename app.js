@@ -631,12 +631,17 @@
           renderDownload();
         } else if (m.type === 'ready') {
           modelReady = true; clearInterval(heartbeat);
-          setMp({ pct: 100, text: '✅ Modello pronto · trascrizione in corso…' });
-          setTimeout(function () { $('modelProgress').hidden = true; }, 600);
+          // I segmenti ora arrivano tutti insieme alla fine (algoritmo long-form
+          // nativo), quindi teniamo la barra visibile per mostrare l'avanzamento.
+          setMp({ pct: 0, text: '✅ Modello pronto · trascrizione in corso…' });
+        } else if (m.type === 'chunk') {
+          var pc = Math.round((m.progress || 0) * 100);
+          setMp({ pct: pc, text: 'Trascrizione in corso — ' + pc + '%' });
         } else if (m.type === 'segments') {
           (m.segments || []).forEach(addSegment);
         } else if (m.type === 'done') {
           clearInterval(heartbeat);
+          $('modelProgress').hidden = true;
           setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
           if (!segments.length) toast('Nessun parlato riconosciuto nell\'audio.', '');
           else toast('Trascrizione completata.', 'success');
@@ -655,7 +660,7 @@
         toast('Errore nel motore di trascrizione (rete necessaria al primo uso).', 'error');
       };
 
-      worker.postMessage({ type: 'transcribe', audio: audio, sampleRate: 16000, model: model, language: language, chunkSec: 20 }, [audio.buffer]);
+      worker.postMessage({ type: 'transcribe', audio: audio, sampleRate: 16000, model: model, language: language }, [audio.buffer]);
     })();
   });
 

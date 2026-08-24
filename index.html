@@ -183,8 +183,10 @@
           <div class="field">
             <label class="field-label" for="modelSel">Modello</label>
             <select id="modelSel" class="select-input">
-              <option value="Xenova/whisper-tiny" selected>Whisper Tiny · veloce (~40&nbsp;MB)</option>
-              <option value="Xenova/whisper-base">Whisper Base · più preciso (~145&nbsp;MB)</option>
+              <option value="Xenova/whisper-tiny">Whisper Tiny · veloce, meno preciso (~40&nbsp;MB)</option>
+              <option value="Xenova/whisper-base" selected>Whisper Base · equilibrato (~145&nbsp;MB)</option>
+              <option value="Xenova/whisper-small">Whisper Small · alta precisione, ideale per le canzoni (~245&nbsp;MB)</option>
+              <option value="Xenova/whisper-medium">Whisper Medium · massima precisione, molto lento (~740&nbsp;MB)</option>
             </select>
           </div>
           <div class="field">
@@ -204,10 +206,12 @@
           </button>
         </div>
 
+        <p class="transcribe-hint">🎧 <strong>Canzoni:</strong> scegli <em>Small</em> o <em>Medium</em> e imposta la <strong>lingua</strong> del brano (non lasciare “Rilevamento automatico”): l'intro strumentale può ingannare il rilevatore. Nota: la musica di sottofondo resta la difficoltà principale — Whisper è pensato per il parlato. Per un testo davvero pulito, isola prima la voce dalla base (rimozione strumentale) e trascrivi la traccia con la sola voce.</p>
+
         <div class="model-progress" id="modelProgress" hidden>
           <div class="mp-bar"><span id="mpFill"></span></div>
           <p class="mp-text" id="mpText">Preparazione del modello…</p>
-          <p class="mp-note">⬇️ Solo la prima volta: il modello (~40&nbsp;MB per Tiny) viene scaricato e messo in cache per l'uso offline. Può richiedere qualche minuto a seconda della connessione — non chiudere la pagina. Poi resta sul tuo dispositivo e le trascrizioni successive sono immediate.</p>
+          <p class="mp-note">⬇️ Solo la prima volta: il modello scelto (da ~40&nbsp;MB per Tiny fino a ~245&nbsp;MB per Small) viene scaricato e messo in cache per l'uso offline. Può richiedere qualche minuto a seconda della connessione — non chiudere la pagina. Poi resta sul tuo dispositivo e le trascrizioni successive sono immediate.</p>
         </div>
 
         <div class="transcript-area" id="transcriptArea" hidden>

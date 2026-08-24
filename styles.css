@@ -261,6 +261,13 @@ input[type="range"]::-moz-range-thumb { width: 15px; height: 15px; border-radius
 @media (max-width: 640px) { .transcribe-controls { grid-template-columns: 1fr; } }
 .btn-transcribe { height: 42px; }
 
+.transcribe-hint {
+  margin-top: 12px; padding: 10px 14px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--hairline);
+  color: var(--text-muted); font-size: 13px; line-height: 1.5;
+}
+.transcribe-hint strong { color: var(--text); }
+
 .model-progress { margin-top: 16px; padding: 14px 16px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--hairline); }
 .mp-bar { height: 8px; border-radius: 999px; background: var(--elevated); overflow: hidden; }
 .mp-bar span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--cyan)); transition: width .25s; }
