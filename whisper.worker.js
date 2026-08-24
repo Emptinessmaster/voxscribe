@@ -78,11 +78,13 @@ self.onmessage = async function (e) {
       stride_length_s: STRIDE_S,
       return_timestamps: true,
 
-      // --- Decodifica di qualità (indipendente dalla dimensione del modello) ---
+      // --- Decodifica di qualità ---
       // Beam search: esplora più ipotesi e sceglie la più probabile, invece di
       // prendere sempre la parola più probabile a ogni passo (greedy). Migliora
-      // la resa sul canto, al costo di più tempo di calcolo.
-      num_beams: 3,
+      // la resa sul canto, al costo di più tempo di calcolo. Va bene per i modelli
+      // fino a Small; modelli più grandi (Medium) non stanno comunque nella
+      // memoria del WASM a thread singolo — vedi nota in index.html.
+      num_beams: (msg.numBeams != null) ? msg.numBeams : 3,
       // Evita che il modello ripeta la stessa sequenza di 3+ parole: taglia i
       // loop di "allucinazioni" tipici sulle parti strumentali/musicali.
       no_repeat_ngram_size: 3,

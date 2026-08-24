@@ -11,7 +11,7 @@
      Hugging Face) passa DIRETTAMENTE in rete: il SW non li tocca mai, così non
      interferisce col download né con la cache interna di Transformers.js.
    ========================================================================= */
-var CACHE = 'voxscribe-v5';
+var CACHE = 'voxscribe-v6';
 
 // Solo questi host cross-origin vengono messi in cache dal SW (le nostre dipendenze).
 function isTrustedCdn(hostname) { return hostname === 'cdn.jsdelivr.net'; }

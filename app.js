@@ -572,8 +572,7 @@
   var MODELS = [
     { id: 'Xenova/whisper-tiny',   name: 'Tiny',   size: '~40 MB',  desc: 'Veloce, meno preciso' },
     { id: 'Xenova/whisper-base',   name: 'Base',   size: '~145 MB', desc: 'Equilibrato' },
-    { id: 'Xenova/whisper-small',  name: 'Small',  size: '~245 MB', desc: 'Alta precisione — ideale per le canzoni' },
-    { id: 'Xenova/whisper-medium', name: 'Medium', size: '~740 MB', desc: 'Massima precisione, molto lento' }
+    { id: 'Xenova/whisper-small',  name: 'Small',  size: '~245 MB', desc: 'Massima precisione — ideale per le canzoni' }
   ];
   var selectedModel = 'Xenova/whisper-base';
   var residentSet = new Set();          // id dei modelli già in cache (offline)
@@ -829,7 +828,12 @@
           clearInterval(heartbeat);
           setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
           $('modelProgress').hidden = true;
-          toast('Errore di trascrizione: ' + m.message, 'error');
+          // ONNX Runtime "OrtRun error code = 6" = memoria WASM esaurita: il modello
+          // è troppo grande per l'inferenza nel browser. Messaggio comprensibile.
+          var isMem = /OrtRun|code = 6|out of memory|memory access|Aborted/i.test(m.message || '');
+          toast(isMem
+            ? 'Memoria insufficiente per questo modello nel browser. Prova un modello più piccolo (es. Small).'
+            : 'Errore di trascrizione: ' + m.message, 'error');
         }
       };
       worker.onerror = function (err) {
