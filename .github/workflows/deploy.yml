@@ -25,6 +25,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepara Node per i controlli
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verifica trascrizione e sintassi
+        run: |
+          node --test tests/transcription.test.cjs
+          node --check app.js
+          node --check transcription.js
+          node --check model-cache.js
+          node --check whisper.worker.js
+          node --check sw.js
+
       - name: Configura Pages
         uses: actions/configure-pages@v5
 

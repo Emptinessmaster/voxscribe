@@ -1,119 +1,61 @@
-/* =========================================================================
-   VoxScribe — Web Worker per la trascrizione (Whisper via Transformers.js)
-   Gira fuori dal thread principale per non bloccare la UI. Il modello viene
-   scaricato una sola volta e messo in cache dal browser per l'uso offline.
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+import './transcription.js?v=lectures-1';
+import './model-cache.js?v=lectures-1';
 
-   L'audio (Float32 mono 16 kHz) viene passato INTERO all'algoritmo long-form
-   nativo di Whisper (chunk_length_s + stride_length_s): finestre da 30 s con
-   sovrapposizione, unite tra loro allineando i timestamp. È molto più preciso
-   del taglio manuale a finestre fisse (che spezzava le parole a ogni bordo e
-   perdeva il contesto tra una finestra e l'altra), soprattutto sul canto.
-   ========================================================================= */
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
-
-// Nessun modello locale: si scarica dall'hub e si mette in cache nel browser.
 env.allowLocalModels = false;
-env.useBrowserCache = true; // cache dei pesi per l'uso offline (predefinito, reso esplicito)
+env.useBrowserCache = true;
+env.useCustomCache = true;
+env.customCache = createVoxModelCache(caches, self.location.href);
+env.backends.onnx.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+env.backends.onnx.wasm.proxy = false;
+let transcriber = null, loadedKey = '', busy = false, selectedDevice = '';
 
-// Su hosting statico (GitHub Pages) la pagina non è cross-origin isolated:
-// niente SharedArrayBuffer → ONNX Runtime deve girare a thread singolo.
-try {
-  if (!self.crossOriginIsolated) {
-    env.backends.onnx.wasm.numThreads = 1;
-    env.backends.onnx.wasm.proxy = false;
+async function getPipeline(model, device, send) {
+  if (!VoxASR.MODELS.some(m => m.id === model)) throw new Error('Modello non consentito.');
+  let adapter = null;
+  if (device !== 'wasm' && navigator.gpu) {
+    try { adapter = await navigator.gpu.requestAdapter(); } catch (_) {}
   }
-} catch (e) {}
-
-var transcriber = null;
-var loadedModel = null;
-
-async function getPipeline(model) {
-  if (transcriber && loadedModel === model) return transcriber;
-  transcriber = await pipeline('automatic-speech-recognition', model, {
-    progress_callback: function (p) { self.postMessage({ type: 'progress', data: p }); }
-  });
-  loadedModel = model;
+  const gpu = !!adapter, turbo = model.endsWith('large-v3-turbo');
+  if (turbo && !gpu) throw new Error('Turbo richiede WebGPU. Scegli Small o Base su questo dispositivo.');
+  const target = gpu ? 'webgpu' : 'wasm', key = model + ':' + target;
+  if (transcriber && loadedKey === key) return transcriber;
+  if (transcriber) { await transcriber.dispose(); transcriber = null; loadedKey = ''; }
+  const opts = {
+    device: target,
+    dtype: target === 'webgpu' ? { encoder_model: turbo && adapter.features.has('shader-f16') ? 'fp16' : 'fp32', decoder_model_merged: 'q4' } : 'q8',
+    progress_callback: data => send('progress', { data })
+  };
+  try { transcriber = await pipeline('automatic-speech-recognition', model, opts); }
+  catch (e) {
+    if (!navigator.onLine) throw new Error('Modello o runtime non presente in cache per questa modalità. Ricollegati per prepararlo, oppure usa un modello già verificato offline.');
+    throw new Error((gpu ? 'Errore GPU o memoria insufficiente. Prova CPU e Small/Base. ' : '') + e.message);
+  }
+  loadedKey = key; selectedDevice = target;
   return transcriber;
 }
 
-self.onmessage = async function (e) {
-  var msg = e.data || {};
-
-  // Solo scaricamento + messa in cache del modello (senza trascrivere), usato dal
-  // pannello "Modelli" per pre-scaricare un modello e renderlo residente/offline.
-  if (msg.type === 'preload') {
-    try {
-      await getPipeline(msg.model || 'Xenova/whisper-base');
-      self.postMessage({ type: 'ready' });
-      self.postMessage({ type: 'done' });
-    } catch (err) {
-      self.postMessage({ type: 'error', message: String((err && err.message) || err) });
-    }
-    return;
-  }
-
-  if (msg.type !== 'transcribe') return;
-
-  var audio = msg.audio;                 // Float32Array mono
-  var sampleRate = msg.sampleRate || 16000;
-  var model = msg.model || 'Xenova/whisper-base';
-  var language = msg.language;           // 'auto' o nome lingua
-
-  // Finestra da 30 s (massimo nativo di Whisper) con 5 s di sovrapposizione per lato.
-  var CHUNK_S = 30, STRIDE_S = 5;
-
+self.onmessage = async e => {
+  const m = e.data || {};
+  const send = (type, data = {}) => self.postMessage({ id: m.id, type, ...data });
+  if (busy) { send('error', { message: 'Motore occupato.' }); return; }
+  busy = true;
   try {
-    var pipe = await getPipeline(model);
-    self.postMessage({ type: 'ready' });
-
-    var durationSec = audio.length / sampleRate;
-
-    // Stima del numero di finestre, solo per far avanzare la barra di avanzamento.
-    var stepSec = Math.max(1, CHUNK_S - 2 * STRIDE_S);
-    var estChunks = Math.max(1, Math.ceil(Math.max(0, durationSec - CHUNK_S) / stepSec) + 1);
-    var doneChunks = 0;
-
-    var opts = {
-      chunk_length_s: CHUNK_S,
-      stride_length_s: STRIDE_S,
-      return_timestamps: true,
-
-      // --- Decodifica di qualità ---
-      // Beam search: esplora più ipotesi e sceglie la più probabile, invece di
-      // prendere sempre la parola più probabile a ogni passo (greedy). Migliora
-      // la resa sul canto, al costo di più tempo di calcolo. Va bene per i modelli
-      // fino a Small; modelli più grandi (Medium) non stanno comunque nella
-      // memoria del WASM a thread singolo — vedi nota in index.html.
-      num_beams: (msg.numBeams != null) ? msg.numBeams : 3,
-      // Evita che il modello ripeta la stessa sequenza di 3+ parole: taglia i
-      // loop di "allucinazioni" tipici sulle parti strumentali/musicali.
-      no_repeat_ngram_size: 3,
-
-      // Chiamata al termine di ogni finestra: la usiamo solo per l'avanzamento.
-      chunk_callback: function () {
-        doneChunks++;
-        self.postMessage({ type: 'chunk', progress: Math.min(0.99, doneChunks / estChunks) });
-      }
+    const pipe = await getPipeline(m.model, m.device, send);
+    send('ready', { device: selectedDevice });
+    if (m.type === 'preload') { send('result', { device: selectedDevice }); return; }
+    if (m.type !== 'transcribe' || !(m.audio instanceof Float32Array) || m.audio.length > 70 * VoxASR.RATE) {
+      throw new Error('Blocco audio non valido.');
+    }
+    const options = {
+      chunk_length_s: 30, stride_length_s: 5, return_timestamps: true,
+      task: 'transcribe', num_beams: 1, do_sample: false,
+      chunk_callback: () => send('chunk')
     };
-    // Fissare la lingua evita che il rilevamento automatico sbagli sull'intro
-    // strumentale di un brano musicale.
-    if (language && language !== 'auto') { opts.language = language; opts.task = 'transcribe'; }
-
-    var out = await pipe(audio, opts);
-
-    var raw = (out && out.chunks && out.chunks.length)
-      ? out.chunks
-      : [{ timestamp: [0, durationSec], text: (out && out.text) || '' }];
-
-    var segments = raw.map(function (c) {
-      var s = (c.timestamp && c.timestamp[0] != null) ? c.timestamp[0] : 0;
-      var en = (c.timestamp && c.timestamp[1] != null) ? c.timestamp[1] : durationSec;
-      return { start: s, end: en, text: (c.text || '').trim() };
-    }).filter(function (s) { return s.text; });
-
-    self.postMessage({ type: 'segments', segments: segments, progress: 1 });
-    self.postMessage({ type: 'done' });
-  } catch (err) {
-    self.postMessage({ type: 'error', message: String((err && err.message) || err) });
-  }
+    if (m.language && m.language !== 'auto') options.language = m.language;
+    const out = await pipe(m.audio, options);
+    const chunks = out.chunks?.length ? out.chunks : [{ timestamp: [0, m.audio.length / VoxASR.RATE], text: out.text || '' }];
+    send('result', { chunks, device: selectedDevice });
+  } catch (e) { send('error', { message: String(e.message || e) }); }
+  finally { busy = false; }
 };

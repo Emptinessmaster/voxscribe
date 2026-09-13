@@ -4,6 +4,16 @@
    elettrico + ciano per la forma d'onda. Dark-first, con tema chiaro opzionale.
    ========================================================================= */
 
+[hidden] { display: none !important; }
+.lecture-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; padding: 16px; align-items: start; }
+.lecture-options select { width: 100%; min-width: 0; }
+.lecture-options label { display: block; margin-bottom: 8px; }
+.local-save { padding: 16px; border-top: 1px solid var(--hairline, #555); }
+.local-save label { display: flex; align-items: baseline; gap: 8px; }
+.local-save p { margin: 10px 0; }
+.transcribe-controls { flex-wrap: wrap; }
+#loadStatus { padding: 0 18px; }
+
 :root {
   --bg:            #0A0B0F;
   --surface:       #12141C;

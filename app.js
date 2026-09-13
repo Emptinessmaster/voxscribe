@@ -95,10 +95,10 @@
     if (!pill || !txt) return;
     if (navigator.onLine) {
       pill.classList.remove('offline');
-      txt.textContent = '🟢 100% Elaborazione Locale (funziona anche in Modalità Aereo)';
+      txt.textContent = '🟢 Audio e testo elaborati solo sul dispositivo';
     } else {
       pill.classList.add('offline');
-      txt.textContent = '✈️ Offline — l\'app funziona lo stesso, tutto in locale';
+      txt.textContent = '✈️ Offline — serve un modello e un motore già scaricati per questa modalità';
     }
   }
   window.addEventListener('online', updateNetStatus);
@@ -120,6 +120,7 @@
     selection: null,     // {start,end} in secondi
     gain: 1,             // guadagno master (0..3)
     history: [],         // stack AudioBuffer per undo
+    audioKey: null,
     playing: false
   };
 
@@ -155,8 +156,11 @@
   }
 
   function pushHistory() {
-    state.history.push(state.buffer);
-    if (state.history.length > 20) state.history.shift();
+    markAudioEdited();
+    // Large recordings must not accumulate gigabytes of undo buffers.
+    var bytes = state.buffer.length * state.buffer.numberOfChannels * 4;
+    if (bytes <= 64 * 1024 * 1024) state.history.push(state.buffer);
+    while (state.history.reduce(function (n, b) { return n + b.length * b.numberOfChannels * 4; }, 0) > 64 * 1024 * 1024) state.history.shift();
     $('undoBtn').disabled = state.history.length === 0;
   }
 
@@ -187,7 +191,8 @@
     g.fillStyle = accent;
     for (var x = 0; x < cssW; x++) {
       var startI = x * samplesPerPx, min = 1, max = -1;
-      for (var i = 0; i < samplesPerPx; i++) {
+      // Bound redraw work independently of recording duration (preview envelope).
+      for (var i = 0; i < samplesPerPx; i += Math.max(1, Math.floor(samplesPerPx / 128))) {
         var v = data[startI + i] || 0;
         if (v < min) min = v; if (v > max) max = v;
       }
@@ -276,6 +281,7 @@
   });
   $('undoBtn').addEventListener('click', function () {
     if (!state.history.length) return;
+    markAudioEdited();
     stopPlayback();
     state.buffer = state.history.pop();
     state.selection = null;
@@ -286,6 +292,7 @@
   // ---- Volume (master, non distruttivo fino all'export) ----
   var gainInput = $('gain'), gainVal = $('gainVal');
   gainInput.addEventListener('input', function () {
+    invalidateTranscription();
     state.gain = parseInt(gainInput.value, 10) / 100;
     gainVal.textContent = gainInput.value + '%';
     if (playGain) playGain.gain.value = state.gain;
@@ -341,10 +348,25 @@
     editorPanel.hidden = false; transcribePanel.hidden = false; exportPanel.hidden = false;
   }
 
-  async function loadArrayBuffer(ab, name) {
+  var audioLoadTicket = 0, loadingAudio = false;
+  async function loadArrayBuffer(ab, name, key, ticket) {
+    ticket = ticket || ++audioLoadTicket;
     try {
-      var decoded = await ctx().decodeAudioData(ab.slice(0));
-      state.buffer = decoded;
+      var Off = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      // Decode directly at the ASR sample rate, without cloning the compressed file.
+      var decoded = await new Off(1, 1, 16000).decodeAudioData(ab);
+      if (ticket !== audioLoadTicket) return;
+      if (decoded.duration > 7200.1) throw new Error('Durata massima supportata: 2 ore. Dividi il file in parti più brevi.');
+      if (decoded.numberOfChannels > 1) {
+        var mono = makeBuffer(1, decoded.length, 16000), data = mono.getChannelData(0);
+        for (var ch = 0; ch < decoded.numberOfChannels; ch++) {
+          var channel = decoded.getChannelData(ch);
+          for (var n = 0; n < data.length; n++) data[n] += channel[n] / decoded.numberOfChannels;
+        }
+        decoded = mono;
+      }
+      invalidateTranscription(); stopPlayback();
+      state.buffer = decoded; state.audioKey = key || null;
       state.filename = (name || 'audio').replace(/\.[^.]+$/, '');
       state.selection = null; state.history = []; state.gain = 1;
       gainInput.value = 100; gainVal.textContent = '100%';
@@ -353,18 +375,28 @@
       drawWaveform(); refreshEditorInfo();
       $('curTime').textContent = '0:00';
       toast('Audio caricato.', 'success');
+      refreshRecovery();
     } catch (err) {
       console.error(err);
-      toast('Impossibile decodificare questo file audio nel browser. Prova con MP3 o WAV.', 'error');
+      if (ticket === audioLoadTicket) toast('Caricamento fallito: ' + err.message + ' Per registrazioni lunghe usa un PC con memoria sufficiente e MP3/WAV.', 'error');
+    } finally {
+      if (ticket === audioLoadTicket) { loadingAudio = false; $('loadStatus').textContent = state.buffer ? 'Audio pronto: mono 16 kHz per contenere la memoria.' : ''; }
     }
   }
 
-  function handleFiles(files) {
+  async function handleFiles(files) {
     var f = files[0]; if (!f) return;
-    var reader = new FileReader();
-    reader.onload = function () { loadArrayBuffer(reader.result, f.name); };
-    reader.onerror = function () { toast('Errore nella lettura del file.', 'error'); };
-    reader.readAsArrayBuffer(f);
+    if (running || loadingAudio) { toast('Interrompi il lavoro in corso prima di caricare un altro file.', 'error'); return; }
+    if (f.size > 512 * 1024 * 1024) { toast('File oltre 512 MiB: usa un MP3 compresso o dividi la registrazione.', 'error'); return; }
+    var ticket = ++audioLoadTicket; loadingAudio = true;
+    invalidateTranscription(); stopPlayback(); state.buffer = null; state.history = []; state.audioKey = null;
+    editorPanel.hidden = true; transcribePanel.hidden = true; exportPanel.hidden = true;
+    $('loadStatus').textContent = 'Lettura e preparazione locale… Per audio lunghi può richiedere tempo.';
+    try {
+      var key = await VoxASR.fingerprint(f);
+      if (ticket !== audioLoadTicket) return;
+      await loadArrayBuffer(await f.arrayBuffer(), f.name, key, ticket);
+    } catch (e) { loadingAudio = false; $('loadStatus').textContent = 'Caricamento fallito: ' + e.message; }
   }
 
   // Dropzone
@@ -386,6 +418,8 @@
   })();
 
   $('editorReset').addEventListener('click', function () {
+    audioLoadTicket++; invalidateTranscription(); state.audioKey = null;
+    engine.cancel(); // An explicit reset also releases the resident model.
     stopPlayback();
     state.buffer = null; state.selection = null; state.history = [];
     editorPanel.hidden = true; transcribePanel.hidden = true; exportPanel.hidden = true;
@@ -403,6 +437,7 @@
       recTimer = setTimeout(tick, 250);
     }
     async function start() {
+      if (running || loadingAudio) { toast('Attendi la fine del lavoro in corso.', 'error'); return; }
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (err) {
@@ -504,24 +539,14 @@
   /* ================================================================== *
    *  TRASCRIZIONE (Whisper in Web Worker)
    * ================================================================== */
-  var worker = null, segments = [];
+  var segments = [];
 
   function clearTranscript() {
     segments = [];
     $('transcript').innerHTML = '';
     $('transcriptArea').hidden = true;
     $('modelProgress').hidden = true;
-  }
-
-  async function toMono16k(buf, gain) {
-    var length = Math.max(1, Math.ceil(buf.duration * 16000));
-    var Off = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    var off = new Off(1, length, 16000);
-    var src = off.createBufferSource(); src.buffer = buf;
-    var g = off.createGain(); g.gain.value = gain;
-    src.connect(g); g.connect(off.destination); src.start();
-    var rendered = await off.startRendering();
-    return rendered.getChannelData(0);
+    $('transcriptCount').textContent = '0 segmenti';
   }
 
   function addSegment(seg) {
@@ -569,282 +594,169 @@
   /* ------------------------------------------------------------------ *
    *  Gestione modelli — scarica singolarmente, mostra quelli residenti
    * ------------------------------------------------------------------ */
-  var MODELS = [
-    { id: 'Xenova/whisper-tiny',   name: 'Tiny',   size: '~40 MB',  desc: 'Veloce, meno preciso' },
-    { id: 'Xenova/whisper-base',   name: 'Base',   size: '~145 MB', desc: 'Equilibrato' },
-    { id: 'Xenova/whisper-small',  name: 'Small',  size: '~245 MB', desc: 'Massima precisione — ideale per le canzoni' }
-  ];
-  var selectedModel = 'Xenova/whisper-base';
-  var residentSet = new Set();          // id dei modelli già in cache (offline)
-  var downloading = null;               // id del modello in scaricamento (o null)
-  var dlWorker = null;
-  var dlPct = 0, dlText = '', dlIndeterminate = true;
-
-  function modelName(id) {
-    for (var i = 0; i < MODELS.length; i++) if (MODELS[i].id === id) return MODELS[i].name;
-    return id;
+  var MODELS = VoxASR.MODELS;
+  var selectedModel = MODELS[0].id;
+  var engine = new VoxASR.Engine(function () { return new Worker('whisper.worker.js?v=lectures-1', { type: 'module' }); });
+  var activeJob = null, running = false, generation = 0, pauseRequested = false;
+  var lockedControls = [], wakeLock = null, storageFailed = false;
+  function savedJob() { try { return VoxASR.readCheckpoint(localStorage); } catch (_) { return null; } }
+  function refreshRecovery() {
+    var saved = savedJob();
+    var matches = saved && state.audioKey && saved.key === state.audioKey && Math.abs(saved.duration - state.buffer.duration) < 0.01;
+    $('restoreBtn').hidden = !matches;
+    $('forgetBtn').hidden = !saved;
+    $('recoveryNote').textContent = saved
+      ? (matches ? 'Risultato salvato su questo dispositivo: ' + fmtTime(saved.next) + ' / ' + fmtTime(saved.duration) + '. Riprendi o esporta il testo.'
+        : 'Esiste una trascrizione salvata localmente. Ricarica lo stesso file originale per recuperarla, oppure cancellala.')
+      : 'Il salvataggio locale conserva solo testo, impostazioni e avanzamento, mai il file audio. Puoi cancellarlo qui.';
+    if (state.buffer && !state.audioKey) $('recoveryNote').textContent = 'Per recuperare questo audio registrato o modificato dopo la chiusura, esportalo in WAV e ricaricalo come file prima di trascrivere. In questa sessione puoi usare pausa/ripresa ed esportare il testo.';
   }
-
-  // Transformers.js mette i pesi nella Cache Storage 'transformers-cache', con
-  // chiave = URL completo di Hugging Face (…/Xenova/whisper-base/resolve/…/*.onnx).
-  // Un modello è "residente" se i suoi file .onnx sono presenti in cache.
-  async function scanResident() {
-    var set = new Set();
+  function setAsrBusy(value) {
+    running = value;
+    if (value) {
+      lockedControls = [];
+      ['transcribeBtn','langSel','engineSel','preloadBtn','modelSelect','editorReset','gain','trimBtn','deleteBtn','undoBtn','recordBtn','fileInput','restoreBtn','forgetBtn','saveLocal'].forEach(function (id) {
+        var e = $(id); lockedControls.push([e, e.disabled]); e.disabled = true;
+      });
+    } else {
+      lockedControls.forEach(function (pair) { pair[0].disabled = pair[1]; }); lockedControls = [];
+    }
+    $('pauseBtn').hidden = !value || !activeJob;
+    $('stopBtn').hidden = !value;
+    $('pauseBtn').disabled = false;
+    $('transcribeLabel').textContent = value ? 'Trascrizione…' : (activeJob && activeJob.next < activeJob.duration ? 'Riprendi trascrizione' : 'Trascrivi audio');
+  }
+  async function keepAwake() {
     try {
-      if (typeof caches === 'undefined') return set;
-      var cache = await caches.open('transformers-cache');
-      var keys = await cache.keys();
-      keys.forEach(function (req) {
-        var u = (req && req.url) || '';
-        if (!/\.onnx(\?|$)/.test(u)) return;
-        MODELS.forEach(function (m) { if (u.indexOf('/' + m.id + '/') !== -1) set.add(m.id); });
-      });
-    } catch (e) {}
-    return set;
-  }
-
-  function updateDlProgress() {
-    var fill = document.getElementById('mmProgFill');
-    if (!fill) return;
-    var bar = fill.parentElement, txt = document.getElementById('mmProgTxt');
-    if (dlIndeterminate) { bar.classList.add('indeterminate'); }
-    else { bar.classList.remove('indeterminate'); fill.style.width = Math.max(0, Math.min(100, dlPct || 0)) + '%'; }
-    if (txt) txt.textContent = dlText || '';
-  }
-
-  function renderModelManager() {
-    var list = $('mmList'); if (!list) return;
-    list.innerHTML = '';
-    MODELS.forEach(function (m) {
-      var isResident = residentSet.has(m.id);
-      var isDl = (downloading === m.id);
-
-      var li = document.createElement('li');
-      li.className = 'mm-item' + (m.id === selectedModel ? ' is-selected' : '');
-      li.setAttribute('data-model', m.id);
-
-      var pick = document.createElement('label'); pick.className = 'mm-pick';
-      var radio = document.createElement('input');
-      radio.type = 'radio'; radio.name = 'modelPick'; radio.value = m.id; radio.checked = (m.id === selectedModel);
-      radio.addEventListener('change', function () { selectedModel = m.id; renderModelManager(); });
-      var info = document.createElement('span'); info.className = 'mm-info';
-      var nm = document.createElement('span'); nm.className = 'mm-name';
-      nm.appendChild(document.createTextNode(m.name));
-      var sz = document.createElement('span'); sz.className = 'mm-size'; sz.textContent = m.size; nm.appendChild(sz);
-      var desc = document.createElement('span'); desc.className = 'mm-desc'; desc.textContent = m.desc;
-      info.appendChild(nm); info.appendChild(desc);
-      pick.appendChild(radio); pick.appendChild(info);
-
-      var right = document.createElement('div'); right.className = 'mm-right';
-      var status = document.createElement('span');
-      var action = document.createElement('button'); action.type = 'button'; action.className = 'btn btn-outline btn-sm mm-dl';
-
-      if (isDl) {
-        status.className = 'mm-status is-loading'; status.textContent = '⬇️ Scaricamento…';
-        action.textContent = 'In corso…'; action.disabled = true;
-      } else if (isResident) {
-        status.className = 'mm-status is-ready'; status.textContent = '✅ Pronto · offline';
-        action.textContent = 'Scaricato'; action.disabled = true;
-      } else {
-        status.className = 'mm-status is-absent'; status.textContent = 'Non scaricato';
-        action.textContent = '⬇️ Scarica';
-        action.addEventListener('click', function (e) { e.stopPropagation(); downloadModel(m.id); });
+      if (navigator.wakeLock && document.visibilityState === 'visible') {
+        var lock = await navigator.wakeLock.request('screen');
+        if (!running) { lock.release().catch(function () {}); return; }
+        wakeLock = lock; lock.addEventListener('release', function () { if (wakeLock === lock) wakeLock = null; });
       }
-      if (downloading && downloading !== m.id && !isResident) action.disabled = true;
-
-      right.appendChild(status); right.appendChild(action);
-      li.appendChild(pick); li.appendChild(right);
-
-      if (isDl) {
-        var prog = document.createElement('div'); prog.className = 'mm-prog';
-        var pbar = document.createElement('div'); pbar.className = 'mm-prog-bar' + (dlIndeterminate ? ' indeterminate' : '');
-        var pfill = document.createElement('span'); pfill.id = 'mmProgFill';
-        if (!dlIndeterminate) pfill.style.width = (dlPct || 0) + '%';
-        pbar.appendChild(pfill);
-        var ptxt = document.createElement('span'); ptxt.className = 'mm-prog-txt'; ptxt.id = 'mmProgTxt'; ptxt.textContent = dlText || '';
-        prog.appendChild(pbar); prog.appendChild(ptxt);
-        li.appendChild(prog);
-      }
-
-      li.addEventListener('click', function (e) {
-        if (e.target.closest('.mm-dl')) return;
-        selectedModel = m.id; renderModelManager();
-      });
-      list.appendChild(li);
-    });
+    } catch (_) {}
   }
-
-  function downloadModel(id) {
-    if (downloading) return;
-    downloading = id; dlPct = 0; dlText = 'Preparazione…'; dlIndeterminate = true;
-    renderModelManager();
-
-    var dlFiles = {}, dlStart = Date.now(), ready = false;
-    function tick() {
-      if (ready) return;
-      var loaded = 0, total = 0, totalKnown = true, any = false;
-      for (var k in dlFiles) { any = true; loaded += dlFiles[k].loaded || 0; if (dlFiles[k].total) total += dlFiles[k].total; else totalKnown = false; }
-      var secs = Math.round((Date.now() - dlStart) / 1000);
-      if (!any) { dlIndeterminate = true; dlText = 'Preparazione… ' + secs + 's'; }
-      else if (totalKnown && total > 0) { dlIndeterminate = false; dlPct = loaded / total * 100; dlText = fmtMB(loaded) + ' / ' + fmtMB(total) + ' · ' + secs + 's'; }
-      else { dlIndeterminate = true; dlText = fmtMB(loaded) + ' scaricati · ' + secs + 's'; }
-      updateDlProgress();
+  function releaseWake() { if (wakeLock) { wakeLock.release().catch(function () {}); wakeLock = null; } }
+  document.addEventListener('visibilitychange', function () { if (running && !wakeLock) keepAwake(); });
+  window.addEventListener('beforeunload', function (e) { if (running) { e.preventDefault(); e.returnValue = ''; } });
+  function saveProgress() {
+    if (!$('saveLocal').checked || !activeJob || !state.audioKey) return;
+    try {
+      localStorage.setItem(VoxASR.CHECKPOINT, JSON.stringify(Object.assign({}, activeJob, { version: VoxASR.VERSION, key: state.audioKey, gain: state.gain, segments: segments })));
+      $('recoveryNote').textContent = 'Testo salvato solo su questo dispositivo fino a ' + fmtTime(activeJob.next) + '.';
+    } catch (_) {
+      if (!storageFailed) toast('Salvataggio locale non disponibile o spazio esaurito. Esporta il testo prima di chiudere.', 'error');
+      storageFailed = true;
+      $('recoveryNote').textContent = 'Salvataggio locale fallito: esporta TXT/SRT per conservare i risultati.';
     }
-    var hb = setInterval(tick, 500);
-
-    try { dlWorker = new Worker('whisper.worker.js', { type: 'module' }); }
-    catch (e) {
-      clearInterval(hb); downloading = null; renderModelManager();
-      toast('Impossibile avviare il download del modello.', 'error'); return;
+  }
+  function invalidateTranscription() {
+    generation++;
+    if (engine.pending) engine.cancel();
+    activeJob = null; pauseRequested = false;
+    if (running) setAsrBusy(false);
+    releaseWake(); clearTranscript();
+  }
+  function markAudioEdited() {
+    invalidateTranscription(); state.audioKey = null;
+    $('recoveryNote').textContent = 'Audio modificato: pausa/ripresa disponibile in questa sessione. Esporta il testo prima di chiudere; il recupero dopo riapertura richiede un file originale.';
+    $('restoreBtn').hidden = true;
+  }
+  function progressMessage(m) {
+    if (m.type === 'ready') $('engineStatus').textContent = 'Motore attivo: ' + (m.device === 'webgpu' ? 'GPU locale' : 'CPU locale');
+    if ((m.type === 'ready' || m.type === 'chunk') && activeJob) {
+      setMp({ pct: activeJob.next / activeJob.duration * 100, text: 'Elaborazione locale del blocco da ' + fmtTime(activeJob.next) + ' / ' + fmtTime(activeJob.duration) + '…' });
     }
-
-    dlWorker.onmessage = function (e) {
-      var m = e.data || {};
-      if (m.type === 'progress') {
-        var d = m.data || {};
-        if (d.file && (d.status === 'progress' || d.status === 'download' || d.status === 'initiate')) {
-          var prev = dlFiles[d.file] || { loaded: 0, total: 0 };
-          dlFiles[d.file] = {
-            loaded: (d.loaded != null ? d.loaded : prev.loaded) || 0,
-            total: (d.total != null ? d.total : prev.total) || 0
-          };
-        } else if (d.file && d.status === 'done') {
-          if (dlFiles[d.file] && dlFiles[d.file].total) dlFiles[d.file].loaded = dlFiles[d.file].total;
-        }
-        tick();
-      } else if (m.type === 'ready') {
-        ready = true;
-      } else if (m.type === 'done') {
-        clearInterval(hb); finishDownload(id, true);
-      } else if (m.type === 'error') {
-        clearInterval(hb); console.error('Preload error:', m.message);
-        toast('Download modello non riuscito: ' + m.message, 'error');
-        finishDownload(id, false);
-      }
-    };
-    dlWorker.onerror = function (err) {
-      console.error(err); clearInterval(hb);
-      toast('Errore di rete nel download del modello (serve connessione).', 'error');
-      finishDownload(id, false);
-    };
-
-    dlWorker.postMessage({ type: 'preload', model: id });
+    if (m.type === 'progress') {
+      var p = m.data || {};
+      setMp({ indeterminate: true, text: p.file ? 'Preparazione modello: ' + p.file + (p.progress != null ? ' · ' + Math.round(p.progress) + '%' : '') : 'Preparazione del modello locale…' });
+    }
   }
-
-  async function finishDownload(id, ok) {
-    if (dlWorker) { dlWorker.terminate(); dlWorker = null; }
-    downloading = null;
-    residentSet = await scanResident();
-    renderModelManager();
-    if (ok) toast('Modello ' + modelName(id) + ' pronto · disponibile offline.', 'success');
-  }
-
-  // Rileva i modelli già residenti al caricamento, poi disegna il pannello.
-  (async function () { residentSet = await scanResident(); renderModelManager(); })();
-
-  $('transcribeBtn').addEventListener('click', function () {
-    if (!state.buffer) { toast('Carica prima un audio.', 'error'); return; }
-    var btn = this; setBusy(btn, true);
-    $('transcribeLabel').textContent = 'Trascrizione…';
-    clearTranscript();
-    $('transcriptArea').hidden = false;
+  async function preloadModel() {
+    if (running) return;
+    var ticket = ++generation; setAsrBusy(true); $('pauseBtn').hidden = true;
     setMp({ indeterminate: true, text: 'Preparazione del modello…' });
+    try {
+      var result = await engine.request({ type: 'preload', model: selectedModel, device: $('engineSel').value }, progressMessage);
+      if (ticket !== generation) return;
+      setMp({ pct: 100, text: 'Modello pronto in memoria. Verifica la modalità offline prima di un uso senza rete.' });
+      $('engineStatus').textContent = result.device === 'webgpu' ? 'GPU locale pronta' : 'CPU locale pronta';
+    } catch (e) { if (ticket === generation) setMp({ pct: 0, text: 'Preparazione fallita: ' + e.message }); }
+    finally { if (ticket === generation) setAsrBusy(false); }
+  }
+  MODELS.forEach(function (model) {
+    var option = document.createElement('option'); option.value = model.id; option.textContent = model.name; $('modelSelect').appendChild(option);
+  });
+  function updateModelDescription() {
+    selectedModel = $('modelSelect').value;
+    $('modelDescription').textContent = MODELS.find(function (m) { return m.id === selectedModel; }).desc;
+  }
+  $('modelSelect').addEventListener('change', updateModelDescription); updateModelDescription();
+  $('preloadBtn').addEventListener('click', preloadModel);
+  $('pauseBtn').addEventListener('click', function () { pauseRequested = true; this.disabled = true; this.textContent = 'Pausa al termine del blocco…'; });
+  $('stopBtn').addEventListener('click', function () {
+    generation++; engine.cancel(); saveProgress(); setAsrBusy(false); releaseWake();
+    setMp({ pct: activeJob ? activeJob.next / activeJob.duration * 100 : 0, text: 'Interrotto. Il testo completato resta disponibile; puoi riprendere dall’ultimo blocco.' });
+  });
+  $('forgetBtn').addEventListener('click', function () {
+    try { localStorage.removeItem(VoxASR.CHECKPOINT); refreshRecovery(); } catch (_) { toast('Impossibile cancellare il salvataggio locale.', 'error'); }
+  });
+  $('saveLocal').addEventListener('change', function () {
+    if (!this.checked) { try { localStorage.removeItem(VoxASR.CHECKPOINT); } catch (_) {} refreshRecovery(); }
+  });
+  $('restoreBtn').addEventListener('click', function () {
+    var saved = savedJob();
+    if (!saved || saved.key !== state.audioKey || Math.abs(saved.duration - state.buffer.duration) > 0.01) return;
+    clearTranscript(); saved.segments.forEach(addSegment);
+    activeJob = saved; selectedModel = saved.model; $('modelSelect').value = saved.model; updateModelDescription();
+    $('langSel').value = saved.language;
+    state.gain = Number.isFinite(saved.gain) ? saved.gain : 1;
+    gainInput.value = Math.round(state.gain * 100); gainVal.textContent = gainInput.value + '%';
+    $('transcriptArea').hidden = false;
+    setMp({ pct: saved.next / saved.duration * 100, text: 'Recuperato fino a ' + fmtTime(saved.next) + '. Puoi esportare o riprendere.' });
+    setAsrBusy(false); this.hidden = true;
+  });
+  refreshRecovery();
 
-    var model = selectedModel;
-    var language = $('langSel').value;
-
-    (async function () {
-      var audio;
-      try {
-        audio = await toMono16k(state.buffer, state.gain);
-      } catch (e) {
-        console.error(e); toast('Errore nella preparazione dell\'audio.', 'error');
-        setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio'; return;
-      }
-
-      if (worker) { worker.terminate(); worker = null; }
-      try {
-        worker = new Worker('whisper.worker.js', { type: 'module' });
-      } catch (e) {
-        console.error(e); toast('Impossibile avviare il motore di trascrizione.', 'error');
-        setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio'; return;
-      }
-
-      // Traccia i byte scaricati per file. Hugging Face spesso NON invia
-      // Content-Length: in quel caso il totale è ignoto, quindi mostriamo i MB
-      // scaricati + tempo trascorso con barra animata, invece di una % ingannevole.
-      var dlFiles = {}, dlStart = Date.now(), modelReady = false;
-      function renderDownload() {
-        if (modelReady) return;
-        var loaded = 0, total = 0, totalKnown = true, any = false;
-        for (var k in dlFiles) {
-          any = true; loaded += dlFiles[k].loaded || 0;
-          if (dlFiles[k].total) total += dlFiles[k].total; else totalKnown = false;
+  $('transcribeBtn').addEventListener('click', async function () {
+    if (running || !state.buffer) return;
+    var language = $('langSel').value, model = selectedModel;
+    if (!activeJob || activeJob.next >= activeJob.duration || activeJob.model !== model || activeJob.language !== language || activeJob.gain !== state.gain) {
+      clearTranscript();
+      activeJob = { model: model, language: language, next: 0, duration: state.buffer.duration, gain: state.gain };
+    }
+    var ticket = ++generation, sourceBuffer = state.buffer;
+    pauseRequested = false; storageFailed = false; $('pauseBtn').textContent = 'Pausa dopo il blocco';
+    $('transcriptArea').hidden = false;
+    setAsrBusy(true); keepAwake();
+    var started = Date.now(), initialPosition = activeJob.next;
+    try {
+      while (activeJob.next < activeJob.duration && ticket === generation) {
+        var w = VoxASR.windowAt(activeJob.next, activeJob.duration);
+        var startSample = Math.round(w.from * VoxASR.RATE), endSample = Math.round(w.to * VoxASR.RATE);
+        var audio = new Float32Array(sourceBuffer.getChannelData(0).subarray(startSample, endSample));
+        for (var i = 0; i < audio.length; i++) audio[i] = Math.max(-1, Math.min(1, audio[i] * state.gain));
+        setMp({ pct: activeJob.next / activeJob.duration * 100, text: 'Trascrizione ' + fmtTime(w.start) + ' – ' + fmtTime(w.end) + ' / ' + fmtTime(activeJob.duration) });
+        if (!VoxASR.isSilent(audio)) {
+          var result = await engine.request({ type: 'transcribe', model: model, language: language, device: $('engineSel').value, audio: audio }, progressMessage);
+          if (ticket !== generation) return;
+          VoxASR.appendSegments(segments, VoxASR.segmentsForWindow(result.chunks, w)).forEach(addSegment);
         }
-        var secs = Math.round((Date.now() - dlStart) / 1000);
-        if (!any) { setMp({ indeterminate: true, text: 'Preparazione del modello… ' + secs + 's' }); return; }
-        if (totalKnown && total > 0) {
-          setMp({ pct: loaded / total * 100, text: 'Scaricamento modello — ' + fmtMB(loaded) + ' / ' + fmtMB(total) + ' · ' + secs + 's' });
-        } else {
-          setMp({ indeterminate: true, text: 'Scaricamento modello — ' + fmtMB(loaded) + ' scaricati · ' + secs + 's' });
-        }
+        activeJob.next = w.end; saveProgress();
+        var elapsed = (Date.now() - started) / 1000;
+        var processed = activeJob.next - initialPosition;
+        var eta = processed > 0 ? (activeJob.duration - activeJob.next) * elapsed / processed : 0;
+        setMp({ pct: activeJob.next / activeJob.duration * 100, text: fmtTime(activeJob.next) + ' / ' + fmtTime(activeJob.duration) + ' completati · tempo restante stimato ' + fmtTime(eta) });
+        if (pauseRequested) break;
+        await new Promise(function (resolve) { setTimeout(resolve, 0); });
       }
-      var heartbeat = setInterval(renderDownload, 500);
-
-      worker.onmessage = function (e) {
-        var m = e.data || {};
-        if (m.type === 'progress') {
-          var d = m.data || {};
-          if (d.file && (d.status === 'progress' || d.status === 'download' || d.status === 'initiate')) {
-            var prev = dlFiles[d.file] || { loaded: 0, total: 0 };
-            dlFiles[d.file] = {
-              loaded: (d.loaded != null ? d.loaded : prev.loaded) || 0,
-              total: (d.total != null ? d.total : prev.total) || 0
-            };
-          } else if (d.file && d.status === 'done') {
-            if (dlFiles[d.file] && dlFiles[d.file].total) dlFiles[d.file].loaded = dlFiles[d.file].total;
-          }
-          renderDownload();
-        } else if (m.type === 'ready') {
-          modelReady = true; clearInterval(heartbeat);
-          // I segmenti ora arrivano tutti insieme alla fine (algoritmo long-form
-          // nativo), quindi teniamo la barra visibile per mostrare l'avanzamento.
-          setMp({ pct: 0, text: '✅ Modello pronto · trascrizione in corso…' });
-        } else if (m.type === 'chunk') {
-          var pc = Math.round((m.progress || 0) * 100);
-          setMp({ pct: pc, text: 'Trascrizione in corso — ' + pc + '%' });
-        } else if (m.type === 'segments') {
-          (m.segments || []).forEach(addSegment);
-        } else if (m.type === 'done') {
-          clearInterval(heartbeat);
-          $('modelProgress').hidden = true;
-          setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
-          // Il modello appena usato è ora in cache: aggiorna lo stato "residente".
-          scanResident().then(function (s) { residentSet = s; renderModelManager(); });
-          if (!segments.length) toast('Nessun parlato riconosciuto nell\'audio.', '');
-          else toast('Trascrizione completata.', 'success');
-        } else if (m.type === 'error') {
-          console.error('Worker error:', m.message);
-          clearInterval(heartbeat);
-          setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
-          $('modelProgress').hidden = true;
-          // ONNX Runtime "OrtRun error code = 6" = memoria WASM esaurita: il modello
-          // è troppo grande per l'inferenza nel browser. Messaggio comprensibile.
-          var isMem = /OrtRun|code = 6|out of memory|memory access|Aborted/i.test(m.message || '');
-          toast(isMem
-            ? 'Memoria insufficiente per questo modello nel browser. Prova un modello più piccolo (es. Small).'
-            : 'Errore di trascrizione: ' + m.message, 'error');
-        }
-      };
-      worker.onerror = function (err) {
-        console.error(err);
-        clearInterval(heartbeat);
-        setBusy(btn, false); $('transcribeLabel').textContent = 'Trascrivi audio';
-        toast('Errore nel motore di trascrizione (rete necessaria al primo uso).', 'error');
-      };
-
-      worker.postMessage({ type: 'transcribe', audio: audio, sampleRate: 16000, model: model, language: language }, [audio.buffer]);
-    })();
+      if (ticket !== generation) return;
+      var done = activeJob.next >= activeJob.duration;
+      setMp({ pct: activeJob.next / activeJob.duration * 100, text: done ? 'Trascrizione completata. Rivedi nomi, termini tecnici e interventi sovrapposti prima di usare il testo.' : 'In pausa. Il testo completato è esportabile; riprendi quando vuoi.' });
+    } catch (e) {
+      if (ticket === generation) setMp({ pct: activeJob.next / activeJob.duration * 100, text: 'Trascrizione interrotta: ' + e.message + ' Il testo precedente è conservato. Puoi riprendere o esportare.' });
+    } finally {
+      if (ticket === generation) { setAsrBusy(false); releaseWake(); refreshRecovery(); }
+    }
   });
 
   // Copia / download testo
@@ -889,7 +801,7 @@
     var refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', function () {
       if (refreshing) return; refreshing = true;
-      if (hadController) window.location.reload();
+      if (hadController && !running && !state.buffer && !loadingAudio) window.location.reload();
     });
     window.addEventListener('load', function () {
       navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {

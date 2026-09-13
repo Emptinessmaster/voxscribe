@@ -1,0 +1,13 @@
+# VoxScribe: trascrizione locale per registrazioni lunghe
+
+- `app.js` mantiene un AudioBuffer mono 16 kHz e invia solo copie di finestre di massimo 70 secondi. L'originale non viene trasferito al worker né inviato in rete. La decodifica iniziale resta a file intero.
+- `transcription.js` contiene funzioni pure per finestre, timestamp, silenzi conservativi, deduplicazione esclusivamente sul contesto sovrapposto, fingerprint completo a blocchi, schema del checkpoint e client Engine a richiesta singola.
+- `model-cache.js` implementa la cache personalizzata dei soli pesi pubblici: frammenti da 8 MiB, manifest pubblicato solo a completamento, lettura in streaming e rifiuto dei file incompleti. Usa `transformers-voxscribe-chunks-v1` e legge anche la vecchia `transformers-cache`. Non memorizza audio/testo. Questa suddivisione evita il fallimento di Cache.put osservato con singoli encoder grandi.
+- `whisper.worker.js` mantiene una pipeline Transformers.js 3.8.1 fino a cambio modello/device o interruzione esplicita. Le risposte includono ID univoci; richieste concurrenti sono rifiutate. Small/Base supportano GPU e CPU; Turbo richiede GPU. Non sostituire silenziosamente il modello.
+- `app.js` possiede avanzamento e segmenti. Un blocco viene salvato solo dopo il completamento. Stop termina il worker; pausa lo conserva. Generazioni e ID impediscono alle risposte tardive di ripristinare risultati annullati.
+- Il checkpoint è unico e locale; contiene hash del file, lingua, modello, guadagno, durata, prossimo punto e segmenti, mai audio. Le modifiche distruttive invalidano l'identità recuperabile. Il salvataggio può essere disattivato/cancellato e gli errori di storage devono essere visibili.
+- I controlli che possono cambiare l'audio sono bloccati durante il lavoro; gli aggiornamenti SW non ricaricano una pagina che contiene audio.
+- `sw.js` elimina solo cache con prefisso `voxscribe-`; preserva `transformers-cache`. Le risorse applicative sono versionate con `lectures-1`: aggiorna lo stesso identificatore in HTML, worker, controller e shell nelle release incompatibili.
+- Niente diarizzazione automatica: non inventare etichette parlante senza un motore dedicato. Non descrivere il filtro dei blocchi silenziosi come VAD neurale.
+
+Verifiche: unit test, browser con inferenza simulata, due ore di silenzio decodificate nel browser, brevi trascrizioni reali IT/EN su CPU Base e GPU Small/Turbo. Tutti e tre hanno superato la riapertura offline in Edge; la cache a frammenti risolve il fallimento osservato inizialmente con i pesi grandi. I tempi di fixture corte non stimano una lezione intera. Il browser può comunque eliminare le cache: verificare il modello/device desiderato prima dell'uso senza rete.

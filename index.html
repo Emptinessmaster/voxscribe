@@ -19,11 +19,8 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icon.svg" />
 
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=lectures-1" />
 
   <script type="application/ld+json">
   {
@@ -67,7 +64,7 @@
         <span class="trust-shield" aria-hidden="true">🛡️</span>
         <span class="trust-text">
           <strong>Zero Cloud.</strong>
-          I tuoi file vocali e le trascrizioni vengono elaborati solo sul tuo processore.
+          I tuoi file vocali e le trascrizioni vengono elaborati solo sul tuo dispositivo.
         </span>
         <button class="trust-info" id="howBtn" type="button">Come funziona?</button>
       </div>
@@ -92,7 +89,7 @@
       <div class="wrap">
         <p class="eyebrow">Editor audio + speech-to-text · 100% nel tuo browser</p>
         <h1>Taglia il tuo audio e <span class="accent-text">trascrivilo</span> in testo.<br />Senza che la tua voce lasci il dispositivo.</h1>
-        <p class="lede">Registra dal microfono o carica un file, modifica la forma d'onda e ottieni una trascrizione con timestamp grazie a Whisper eseguito in locale via WebAssembly. Niente server, niente abbonamenti cloud.</p>
+        <p class="lede">Trascrivi lezioni e assemblee in italiano e inglese, fino a 2 ore per file. Elaborazione locale su GPU o CPU, risultati progressivi e recupero del testo salvato. Nessun upload dell'audio.</p>
         <div class="status-pill" id="localStatus">
           <span class="status-dot"></span>
           <span id="localStatusText">🟢 100% Elaborazione Locale (funziona anche in Modalità Aereo)</span>
@@ -105,6 +102,13 @@
 
       <!-- STEP 1 — Sorgente -->
       <div class="panel" id="sourcePanel">
+        <p id="loadStatus" role="status" aria-live="polite"></p>
+        <div class="local-save">
+          <label><input id="saveLocal" type="checkbox" checked> Salva testo e avanzamento solo su questo dispositivo</label>
+          <p id="recoveryNote" class="field-hint" role="status"></p>
+          <button id="restoreBtn" type="button" class="btn btn-outline btn-sm" hidden>Recupera trascrizione</button>
+          <button id="forgetBtn" type="button" class="btn btn-outline btn-sm" hidden>Cancella salvataggio locale</button>
+        </div>
         <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Carica un file audio o video">
           <input type="file" id="fileInput" accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav" hidden />
           <div class="dropzone-empty">
@@ -162,7 +166,7 @@
               <output class="field-value" id="gainVal">100%</output>
             </div>
             <input type="range" id="gain" min="0" max="300" step="5" value="100" />
-            <p class="field-hint">Regola il volume dell'intera clip. Anteprima non distruttiva: il guadagno viene applicato all'esportazione e alla trascrizione.</p>
+            <p class="field-hint">Regola il volume dell'intera clip. L'editor e l'export usano audio mono a 16 kHz. Su file lunghi l'annullamento dei tagli può non essere disponibile: conserva l'originale.</p>
           </div>
           <div class="editor-meta">
             <button class="btn btn-ghost btn-sm" id="undoBtn" type="button" disabled>↩ Annulla ultima modifica</button>
@@ -175,7 +179,7 @@
         <div class="panel-head">
           <div>
             <h2>Trascrizione automatica</h2>
-            <p class="panel-sub">Speech-to-text con Whisper, eseguito localmente via WebAssembly.</p>
+            <p class="panel-sub">Lezioni e assemblee fino a 2 ore: italiano e inglese, audio elaborato solo sul dispositivo.</p>
           </div>
         </div>
 
@@ -183,35 +187,37 @@
         <div class="model-manager" id="modelManager">
           <div class="mm-head">
             <span class="mm-title">Modelli di trascrizione</span>
-            <span class="mm-sub">Scaricali una volta: restano sul dispositivo per l'uso offline. Seleziona quello da usare per la trascrizione.</span>
+            <span class="mm-sub">Scarica il modello con una connessione disponibile. I pesi restano nella cache del browser, che può eliminarli se manca spazio.</span>
           </div>
-          <ul class="mm-list" id="mmList" role="radiogroup" aria-label="Scelta del modello"></ul>
+          <div class="lecture-options">
+            <div class="field"><label for="modelSelect">Modello</label><select id="modelSelect" class="select-input" aria-describedby="modelDescription"></select><p id="modelDescription" class="field-hint"></p></div>
+            <div class="field"><label for="engineSel">Elaborazione</label><select id="engineSel" class="select-input"><option value="auto">GPU se disponibile, altrimenti CPU</option><option value="wasm">CPU (compatibilità)</option></select><p id="engineStatus" class="field-hint" role="status">La disponibilità della GPU viene verificata sul tuo dispositivo.</p></div>
+            <button id="preloadBtn" type="button" class="btn btn-outline">Prepara modello</button>
+          </div>
         </div>
 
         <div class="transcribe-controls">
           <div class="field">
             <label class="field-label" for="langSel">Lingua</label>
             <select id="langSel" class="select-input">
-              <option value="auto" selected>Rilevamento automatico</option>
-              <option value="italian">Italiano</option>
+              <option value="auto">Rilevamento automatico / lingue miste</option>
+              <option value="italian" selected>Italiano</option>
               <option value="english">Inglese</option>
-              <option value="spanish">Spagnolo</option>
-              <option value="french">Francese</option>
-              <option value="german">Tedesco</option>
             </select>
           </div>
           <button class="btn btn-primary btn-transcribe" id="transcribeBtn" type="button">
             <span class="btn-spinner" hidden></span>
             <span id="transcribeLabel">Trascrivi audio</span>
           </button>
+          <button id="pauseBtn" type="button" class="btn btn-outline" hidden>Pausa dopo il blocco</button>
+          <button id="stopBtn" type="button" class="btn btn-outline" hidden>Interrompi ora</button>
         </div>
 
-        <p class="transcribe-hint">🎧 <strong>Canzoni:</strong> scegli <em>Small</em> (il più preciso che gira in modo affidabile nel browser) e imposta la <strong>lingua</strong> del brano (non lasciare “Rilevamento automatico”): l'intro strumentale può ingannare il rilevatore. Nota: la musica di sottofondo resta la difficoltà principale — Whisper è pensato per il parlato. Per un testo davvero pulito, isola prima la voce dalla base (rimozione strumentale) e trascrivi la traccia con la sola voce.</p>
-
+        <p class="transcribe-hint">Per lezioni e assemblee scegli la lingua parlata. Il testo compare ogni minuto di audio elaborato; la durata reale dipende dal PC e dal modello. Solo i blocchi quasi completamente silenziosi vengono saltati. Non vengono identificati automaticamente i parlanti: rivedi voci sovrapposte, nomi e termini tecnici.</p>
         <div class="model-progress" id="modelProgress" hidden>
           <div class="mp-bar"><span id="mpFill"></span></div>
-          <p class="mp-text" id="mpText">Preparazione del modello…</p>
-          <p class="mp-note">⬇️ Solo la prima volta: il modello scelto (da ~40&nbsp;MB per Tiny fino a ~245&nbsp;MB per Small) viene scaricato e messo in cache per l'uso offline. Può richiedere qualche minuto a seconda della connessione — non chiudere la pagina. Poi resta sul tuo dispositivo e le trascrizioni successive sono immediate.</p>
+          <p class="mp-text" id="mpText" role="status" aria-live="polite">Preparazione del modello…</p>
+          <p class="mp-note">Il download può occupare da centinaia di MB a diversi GB, secondo modello e motore. Audio e trascrizione non vengono inviati ai server. Per 1–2 ore usa preferibilmente un PC, tieni aperta la pagina ed evita la sospensione del sistema. Puoi esportare anche un risultato parziale.</p>
         </div>
 
         <div class="transcript-area" id="transcriptArea" hidden>
@@ -248,7 +254,7 @@
       <div class="how-grid">
         <article class="how-card"><span class="how-num">01</span><h3>Registra o carica</h3><p>Usa il microfono o trascina un file. L'audio resta in memoria, sul tuo dispositivo.</p></article>
         <article class="how-card"><span class="how-num">02</span><h3>Modifica</h3><p>Visualizza la forma d'onda, seleziona, taglia, elimina porzioni e regola il volume.</p></article>
-        <article class="how-card"><span class="how-num">03</span><h3>Trascrivi</h3><p>Whisper gira in locale via WASM e produce il testo con timestamp, anche offline.</p></article>
+        <article class="how-card"><span class="how-num">03</span><h3>Trascrivi</h3><p>Whisper gira sul dispositivo con GPU o CPU e produce testo progressivo con timestamp.</p></article>
         <article class="how-card"><span class="how-num">04</span><h3>Esporta</h3><p>Copia il testo, scaricalo come TXT o SRT, e salva l'audio editato in WAV o MP3.</p></article>
       </div>
     </section>
@@ -259,19 +265,19 @@
         <h2>Domande frequenti</h2>
         <details class="faq-item" open>
           <summary>La mia voce viene inviata a un server?</summary>
-          <p>No. L'editing avviene con la Web Audio API e la trascrizione con Whisper eseguito via WebAssembly (ONNX Runtime), tutto nel tuo browser. L'audio e il testo non lasciano mai il dispositivo.</p>
+          <p>No. Editing e trascrizione avvengono nel browser su GPU o CPU. L'audio non viene caricato su server; il salvataggio opzionale conserva il testo solo nell'archiviazione locale del browser. Su dispositivi condivisi puoi disattivarlo e cancellare il salvataggio.</p>
         </details>
         <details class="faq-item">
           <summary>Cosa viene scaricato dalla rete?</summary>
-          <p>Solo il modello Whisper, una volta, alla prima trascrizione. Viene messo in cache per l'uso offline. Da lì in poi tutto funziona senza connessione.</p>
+          <p>Il browser scarica codice e pesi pubblici da jsDelivr e Hugging Face: questi servizi ricevono le normali richieste di download, mai il tuo audio o testo. I file scaricati vengono conservati nella cache quando lo spazio lo consente.</p>
         </details>
         <details class="faq-item">
           <summary>Funziona offline?</summary>
-          <p>Sì. Dopo il primo caricamento dei modelli puoi installare VoxScribe come app (PWA) e usarla in modalità aereo.</p>
+          <p>Sì, se codice, runtime e variante del modello scelta sono già in cache. Esegui prima una prova nella modalità GPU/CPU desiderata e verifica il funzionamento senza rete. Il browser può eliminare i file memorizzati quando manca spazio.</p>
         </details>
         <details class="faq-item">
           <summary>Perché la trascrizione a volte è lenta?</summary>
-          <p>Il modello gira sul tuo processore. Su hosting statici il calcolo è a thread singolo per motivi di sicurezza del browser: il modello Tiny è il più veloce. Audio più corti e il modello Tiny danno risultati più rapidi.</p>
+          <p>La velocità dipende da modello, hardware e durata. WebGPU usa la GPU se compatibile; altrimenti Small e Base possono usare la CPU. Il motore resta in memoria tra i blocchi. Nessuna velocità in tempo reale è garantita.</p>
         </details>
       </div>
     </section>
@@ -314,11 +320,11 @@
       <button class="modal-close" data-close-modal aria-label="Chiudi">✕</button>
       <div class="modal-emoji" aria-hidden="true">🛡️</div>
       <h3 id="howTitle">Come VoxScribe protegge la tua voce</h3>
-      <p>Tutto avviene <strong>nel motore del tuo browser</strong>: l'audio viene decodificato con la Web Audio API e trascritto da <strong>Whisper</strong> eseguito via <strong>WebAssembly</strong> (ONNX Runtime), direttamente sul tuo processore.</p>
+      <p>Tutto avviene <strong>nel browser</strong>: l'audio viene decodificato localmente e trascritto da <strong>Whisper</strong> su GPU (WebGPU) o CPU (WebAssembly). Per scaricare modelli e librerie il browser contatta i relativi CDN, senza trasmettere audio o testo.</p>
       <ul class="modal-list">
         <li><span aria-hidden="true">🚫</span> Nessun file audio inviato a un server.</li>
         <li><span aria-hidden="true">🧠</span> Il modello gira in locale, sul tuo dispositivo.</li>
-        <li><span aria-hidden="true">✈️</span> Dopo il primo download del modello, funziona offline.</li>
+        <li><span aria-hidden="true">✈️</span> Offline dopo aver preparato runtime e modello per la modalità scelta, finché restano in cache.</li>
       </ul>
       <button class="btn btn-primary btn-block" data-close-modal>Ho capito</button>
     </div>
@@ -341,6 +347,7 @@
 
   <div class="toast" id="toast" hidden></div>
 
-  <script src="app.js"></script>
+  <script src="transcription.js?v=lectures-1"></script>
+  <script src="app.js?v=lectures-1"></script>
 </body>
 </html>
